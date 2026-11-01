@@ -1,0 +1,85 @@
+# ── androai_case_processor configuration ──────────────────────────────────
+# This pipeline is designed to run via cron.  It discovers Zintel cases by
+# researcher + case-name prefix, downloads the associated samples, runs
+# androAiV2 LLM analysis, and uploads the resulting artifact ZIP + comment
+# back to the same Zintel case.
+
+# ── Zintel connection ─────────────────────────────────────────────────────
+zintel:
+  api_url: "https://z-intel-plus.corp.zscaler.com/"
+  api_key: "${ZINTEL_API_KEY}"
+  old_url: "http://10.66.10.53:8005/"         # legacy session for add_comment
+  username: "${ZINTEL_USERNAME}"
+  password: "${ZINTEL_PASSWORD}"
+  source_id: 2
+  timeout: 60
+  verify_ssl: true
+
+# ── AndroAI settings ──────────────────────────────────────────────────────
+androai:
+  root: "/home/metamorphosis/workspace/androAiV2"
+  script: "llm_V1/modified_trial8_multiple_models.py"
+  venv_python: "/home/metamorphosis/workspace/androAiV2/.venv/bin/python3"
+  lease_hours: 0.25
+  generate_rules: true
+  vt_enrich: true
+  timeout: 7200
+
+# ── YARA pre-scan ─────────────────────────────────────────────────────────
+yara:
+  enabled: true
+  scan_file: "/home/metamorphosis/workspace/androAiV2/llm_V1/yara_exports/zstatic-apk-sig.yara"
+  llm_generated_dir: "/home/metamorphosis/workspace/androAiV2/llm_V1/generated_rules/yara"
+
+# ── Storage paths ─────────────────────────────────────────────────────────
+paths:
+  sample_download_dir: "/mnt/ext_storage2/androai_processor/samples"
+  report_dir: "/mnt/ext_storage2/androai_processor/reports"
+  artifact_dir: "/mnt/ext_storage2/androai_processor/artifacts"
+  state_file: "data/processed_state.json"
+  log_dir: "logs"
+
+# ── Pipeline behaviour ────────────────────────────────────────────────────
+pipeline:
+  dry_run: false
+  log_level: "INFO"
+  max_samples_per_batch: 50
+  cleanup_samples_after_run: true
+
+# ── Researchers ───────────────────────────────────────────────────────────
+# Each researcher can have multiple case prefixes enabled.  The pipeline
+# queries Zintel for cases matching each prefix with status=assigned,
+# filters out already-processed cases, then downloads + analyses samples.
+#
+# Case naming conventions (created by clean_smba_cases / crawler workflow):
+#   SMBA_LLM_{researcher_id}_{timestamp}
+#   SMBA_Suspicious_{researcher_id}_{timestamp}
+#   Crawler_NotOnVT_{researcher_id}_{timestamp}
+#   Crawler_Malicious_{researcher_id}_{timestamp}
+#   Crawler_LowScore_SuspPerm_{researcher_id}_{timestamp}
+researchers:
+  - id: 108
+    name: "avishwakarma"
+    enabled: true
+    case_prefixes:
+      - prefix: "SMBA_LLM_108_"
+        enabled: true
+      - prefix: "SMBA_Suspicious_108_"
+        enabled: false
+      - prefix: "Crawler_NotOnVT_108_"
+        enabled: true
+      - prefix: "Crawler_Malicious_108_"
+        enabled: true
+      - prefix: "Crawler_LowScore_SuspPerm_108_"
+        enabled: false
+
+  - id: 118
+    name: "another_researcher"
+    enabled: false
+    case_prefixes:
+      - prefix: "SMBA_LLM_118_"
+        enabled: true
+      - prefix: "Crawler_Malicious_118_"
+        enabled: true
+      - prefix: "Crawler_NotOnVT_118_"
+        enabled: false
