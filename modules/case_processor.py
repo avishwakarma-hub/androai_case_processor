@@ -155,6 +155,7 @@ def process_case(case_info, cfg, zintel, compiled_yara, dry_run=False):
     )
 
     # 7 — Upload artifact + add comment
+    entry["artifact_zip_path"] = artifact_zip
     entry["artifact_attached"] = zintel.attach_artifact_to_case(case_id, artifact_zip)
     comment = build_case_comment(verdicts, scan_summary, case_name)
     zintel.add_comment_to_case(case_id, comment)

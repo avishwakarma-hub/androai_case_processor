@@ -60,6 +60,76 @@ def load_yara_rules(cfg):
     )
 
 
+def _retry_failed_uploads(state, state_path, zintel, cfg, logger):
+    """Retry artifact uploads for cases where processing succeeded but upload failed.
+
+    Scans the state file for entries with ``artifact_attached: false`` and a
+    valid ``artifact_zip_path`` on disk, then retries the upload.
+    """
+    processed = state.get("processed", {})
+    artifact_dir = cfg["paths"]["artifact_dir"]
+    candidates = []
+
+    for case_id, entry in processed.items():
+        if entry.get("artifact_attached"):
+            continue
+        # Skip entries that errored before reaching the artifact stage
+        if not entry.get("artifact_zip_path") and not entry.get("case_name"):
+            continue
+        candidates.append((case_id, entry))
+
+    if not candidates:
+        logger.info("No failed uploads found in state — nothing to retry")
+        return 0
+
+    logger.info("Found %d case(s) with failed artifact uploads", len(candidates))
+    success_count = 0
+    fail_count = 0
+
+    for case_id, entry in candidates:
+        case_name = entry.get("case_name", "")
+        logger.info("Retrying upload for case %s (%s)", case_id, case_name)
+
+        # Try the recorded path first
+        zip_path = entry.get("artifact_zip_path", "")
+        if not zip_path or not os.path.isfile(zip_path):
+            # Scan the artifact directory for a matching ZIP
+            zip_path = _find_artifact_zip(artifact_dir, case_name)
+
+        if not zip_path:
+            logger.warning("No artifact ZIP found for case %s (%s) — skipping", case_id, case_name)
+            fail_count += 1
+            continue
+
+        ok = zintel.attach_artifact_to_case(case_id, zip_path)
+        if ok:
+            entry["artifact_attached"] = True
+            entry["artifact_zip_path"] = zip_path
+            logger.info("Upload succeeded for case %s", case_id)
+            success_count += 1
+        else:
+            logger.error("Upload still failing for case %s", case_id)
+            fail_count += 1
+
+        save_state(state_path, state)
+
+    logger.info(
+        "Retry complete: %d succeeded, %d failed (of %d total)",
+        success_count, fail_count, len(candidates),
+    )
+    return 0 if fail_count == 0 else 1
+
+
+def _find_artifact_zip(artifact_dir, case_name):
+    """Search *artifact_dir* for a ZIP whose name starts with *case_name*."""
+    if not case_name or not os.path.isdir(artifact_dir):
+        return None
+    for fname in sorted(os.listdir(artifact_dir), reverse=True):
+        if fname.startswith(case_name) and fname.endswith(".zip"):
+            return os.path.join(artifact_dir, fname)
+    return None
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="AndroAI case processor - cron-based LLM analysis pipeline",
@@ -67,6 +137,11 @@ def main():
     parser.add_argument("--config", default="config/config.yaml")
     parser.add_argument("--env-file", default=".env")
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument(
+        "--retry-uploads",
+        action="store_true",
+        help="Retry artifact uploads for previously processed cases where upload failed",
+    )
     args = parser.parse_args()
 
     load_env_file(args.env_file)
@@ -82,6 +157,14 @@ def main():
     state_path = cfg["paths"]["state_file"]
     state = load_state(state_path)
     zintel = ZintelClient(cfg["zintel"])
+
+    # ------------------------------------------------------------------
+    # --retry-uploads: re-upload artifacts for cases that were processed
+    # successfully but where the artifact upload failed.
+    # ------------------------------------------------------------------
+    if args.retry_uploads:
+        return _retry_failed_uploads(state, state_path, zintel, cfg, logger)
+
     compiled_yara = load_yara_rules(cfg)
 
     total_processed = 0
