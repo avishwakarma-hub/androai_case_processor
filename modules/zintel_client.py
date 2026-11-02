@@ -140,20 +140,48 @@ class ZintelClient:
         return extracted
 
     def attach_artifact_to_case(self, case_id, artifact_zip_path):
-        """Attach a ZIP artifact to an existing Zintel case."""
-        url = "%s/api/research/cases/%s/" % (self.api_url, case_id)
+        """Attach a ZIP artifact to an existing Zintel case.
+
+        Tries POST to the artifacts sub-endpoint first, then PUT on the
+        case endpoint as a fallback.
+        """
         if not os.path.isfile(artifact_zip_path):
             logger.error("Artifact file not found: %s", artifact_zip_path)
             return False
+
+        auth_header = {"Authorization": "Api-Key %s" % self.api_key}
+        fname = os.path.basename(artifact_zip_path)
+
+        # Attempt 1: POST to /api/research/cases/{id}/artifacts/
+        artifacts_url = "%s/api/research/cases/%s/artifacts/" % (self.api_url, case_id)
         with open(artifact_zip_path, "rb") as fh:
-            files = {"artifacts": (os.path.basename(artifact_zip_path), fh, "application/zip")}
+            files = {"artifacts": (fname, fh, "application/zip")}
             try:
-                resp = requests.patch(
-                    url, headers={"Authorization": "Api-Key %s" % self.api_key},
+                resp = requests.post(
+                    artifacts_url, headers=auth_header,
                     files=files, timeout=120, verify=self.verify_ssl,
                 )
                 if resp.status_code in (200, 201):
-                    logger.info("Attached artifact to case %s", case_id)
+                    logger.info("Attached artifact to case %s via POST artifacts/", case_id)
+                    return True
+                logger.warning(
+                    "POST artifacts/ returned %s, trying PUT on case endpoint",
+                    resp.status_code,
+                )
+            except requests.RequestException as exc:
+                logger.warning("POST artifacts/ failed: %s, trying PUT", exc)
+
+        # Attempt 2: PUT to /api/research/cases/{id}/
+        case_url = "%s/api/research/cases/%s/" % (self.api_url, case_id)
+        with open(artifact_zip_path, "rb") as fh:
+            files = {"artifacts": (fname, fh, "application/zip")}
+            try:
+                resp = requests.put(
+                    case_url, headers=auth_header,
+                    files=files, timeout=120, verify=self.verify_ssl,
+                )
+                if resp.status_code in (200, 201):
+                    logger.info("Attached artifact to case %s via PUT", case_id)
                     return True
                 logger.error("Artifact upload failed: %s %s", resp.status_code, resp.text[:500])
                 return False
