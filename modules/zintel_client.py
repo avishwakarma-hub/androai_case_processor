@@ -30,12 +30,12 @@ class ZintelClient:
         self._legacy_cookies = None
 
     def get_cases_by_prefix(self, researcher_id, prefix, status="assigned", page_size=100):
-        """Fetch cases whose name starts with *prefix* and have *status*."""
+        """Fetch cases whose name contains *prefix* and have *status*."""
         url = (
             "%s/api/research/cases/?page_size=%d"
             "&caseassignee__assignee_id=%d"
             "&status=%s"
-            "&name__istartswith=%s"
+            "&name__icontains=%s"
         ) % (self.api_url, page_size, researcher_id, status, prefix)
         cases = []
         while url:
@@ -43,7 +43,15 @@ class ZintelClient:
             if resp.status_code != 200:
                 logger.error("Failed to fetch cases: %s %s", resp.status_code, resp.text[:500])
                 break
-            data = resp.json().get("data", {})
+            try:
+                payload = resp.json()
+            except (ValueError, requests.exceptions.JSONDecodeError):
+                logger.error(
+                    "Non-JSON response fetching cases (prefix=%s): status=%s body=%s",
+                    prefix, resp.status_code, resp.text[:300],
+                )
+                break
+            data = payload.get("data", {})
             results = data.get("results", []) if isinstance(data, dict) else []
             cases.extend(results)
             url = data.get("next") if isinstance(data, dict) else None
@@ -59,7 +67,11 @@ class ZintelClient:
             if resp.status_code != 200:
                 logger.error("Failed to fetch samples for case %s: %s", case_id, resp.status_code)
                 break
-            payload = resp.json()
+            try:
+                payload = resp.json()
+            except (ValueError, requests.exceptions.JSONDecodeError):
+                logger.error("Non-JSON response fetching samples for case %s", case_id)
+                break
             data = payload.get("data", payload)
             if isinstance(data, dict):
                 results = data.get("results", [])
