@@ -142,46 +142,48 @@ class ZintelClient:
     def attach_artifact_to_case(self, case_id, artifact_zip_path):
         """Attach a ZIP artifact to an existing Zintel case.
 
-        Tries POST to the artifacts sub-endpoint first, then PUT on the
-        case endpoint as a fallback.
+        Fetches the existing case details (name, comments) then PUTs them
+        back together with the artifact file as multipart form-data — the
+        same pattern the VT pipeline uses for case creation.
         """
         if not os.path.isfile(artifact_zip_path):
             logger.error("Artifact file not found: %s", artifact_zip_path)
             return False
 
+        # Fetch current case details so we can supply required fields
+        case_url = "%s/api/research/cases/%s/" % (self.api_url, case_id)
+        try:
+            get_resp = requests.get(case_url, headers=self.headers, timeout=self.timeout, verify=self.verify_ssl)
+            if get_resp.status_code == 200:
+                case_data = get_resp.json().get("data", get_resp.json())
+            else:
+                case_data = {}
+                logger.warning("Could not fetch case %s details: %s", case_id, get_resp.status_code)
+        except Exception as exc:
+            case_data = {}
+            logger.warning("Error fetching case %s details: %s", case_id, exc)
+
+        case_name = case_data.get("name", "case_%s" % case_id)
+        case_comments = case_data.get("comments", "")
+
+        # PUT with required fields + artifact
         auth_header = {"Authorization": "Api-Key %s" % self.api_key}
         fname = os.path.basename(artifact_zip_path)
 
-        # Attempt 1: POST to /api/research/cases/{id}/artifacts/
-        artifacts_url = "%s/api/research/cases/%s/artifacts/" % (self.api_url, case_id)
+        form_data = {
+            "name": (None, case_name),
+            "comments": (None, case_comments or "AndroAI artifact attached"),
+        }
         with open(artifact_zip_path, "rb") as fh:
-            files = {"artifacts": (fname, fh, "application/zip")}
-            try:
-                resp = requests.post(
-                    artifacts_url, headers=auth_header,
-                    files=files, timeout=120, verify=self.verify_ssl,
-                )
-                if resp.status_code in (200, 201):
-                    logger.info("Attached artifact to case %s via POST artifacts/", case_id)
-                    return True
-                logger.warning(
-                    "POST artifacts/ returned %s, trying PUT on case endpoint",
-                    resp.status_code,
-                )
-            except requests.RequestException as exc:
-                logger.warning("POST artifacts/ failed: %s, trying PUT", exc)
-
-        # Attempt 2: PUT to /api/research/cases/{id}/
-        case_url = "%s/api/research/cases/%s/" % (self.api_url, case_id)
-        with open(artifact_zip_path, "rb") as fh:
-            files = {"artifacts": (fname, fh, "application/zip")}
+            file_fields = {"artifacts": (fname, fh, "application/zip")}
+            merged = {**form_data, **file_fields}
             try:
                 resp = requests.put(
                     case_url, headers=auth_header,
-                    files=files, timeout=120, verify=self.verify_ssl,
+                    files=merged, timeout=120, verify=self.verify_ssl,
                 )
                 if resp.status_code in (200, 201):
-                    logger.info("Attached artifact to case %s via PUT", case_id)
+                    logger.info("Attached artifact to case %s", case_id)
                     return True
                 logger.error("Artifact upload failed: %s %s", resp.status_code, resp.text[:500])
                 return False
