@@ -124,7 +124,12 @@ class ZintelClient:
         extracted = []
         try:
             with zipfile.ZipFile(zip_path, "r") as zf:
-                zf.extractall(dest_dir)
+                # Zintel sample ZIPs are password-protected with "infected"
+                try:
+                    zf.extractall(dest_dir, pwd=b"infected")
+                except RuntimeError:
+                    # Fallback: try without password (some ZIPs are unprotected)
+                    zf.extractall(dest_dir)
                 for name in zf.namelist():
                     fp = os.path.join(dest_dir, name)
                     if os.path.isfile(fp):
